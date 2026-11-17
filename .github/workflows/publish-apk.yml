@@ -1,0 +1,72 @@
+name: Publish verified MelkaDLC APK
+on:
+  push:
+    paths:
+      - 'android/release/**'
+      - '.github/workflows/publish-apk.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: melkadlc-release-V1.1.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify existing release and refuse asset conflicts
+        run: |
+          gh api "repos/$GH_REPO/releases/tags/V1.1.0" > "$RUNNER_TEMP/release-before.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          r=json.loads((Path(os.environ['RUNNER_TEMP'])/'release-before.json').read_text())
+          assert r['id']==446908778 and r['tag_name']=='V1.1.0'
+          assert not any(a['name']=='MelkaDLC.apk' for a in r['assets']), 'MelkaDLC.apk already exists; refusing to overwrite'
+          assert any(a['id']==754473988 and a['name']=='skinchiki.apk' and a['digest']=='sha256:639e45b129443b86fd35e4f03487547dce599a52443a37ba4ead22ceb082cb6e' for a in r['assets'])
+          PY
+      - name: Restore the exact signed APK from public data
+        run: |
+          curl -fLsS -o "$RUNNER_TEMP/original.apk" https://github.com/brawlstarsillaysing-ui/MELKADLC/releases/download/V1.1.0/skinchiki.apk
+          python3 android/release/reconstruct.py "$RUNNER_TEMP/original.apk" "$RUNNER_TEMP/MelkaDLC.apk"
+      - name: Verify signature and Android metadata
+        run: |
+          python3 - <<'PY'
+          import os, json, subprocess
+          from pathlib import Path
+          candidates=list((Path(os.environ['ANDROID_HOME'])/'build-tools').glob('*/apksigner'))
+          assert candidates, 'Android SDK apksigner unavailable'
+          signer=sorted(candidates)[-1]
+          apk=Path(os.environ['RUNNER_TEMP'])/'MelkaDLC.apk'
+          text=subprocess.check_output([str(signer),'verify','--verbose','--print-certs',str(apk)],text=True)
+          recipe=json.loads(Path('android/release/recipe.json').read_text())
+          assert recipe['certificate_sha256'] in text
+          print(text)
+          badging=subprocess.check_output([str(signer.with_name('aapt')),'dump','badging',str(apk)],text=True)
+          assert "application-label:'MelkaDLC'" in badging
+          assert "name='com.melkadlc.GateActivity'" in badging
+          print(badging)
+          PY
+      - name: Add APK to the existing release without replacing assets
+        run: gh release upload V1.1.0 "$RUNNER_TEMP/MelkaDLC.apk"
+      - name: Verify public download and original asset preservation
+        run: |
+          curl -fLsS -o "$RUNNER_TEMP/downloaded.apk" https://github.com/brawlstarsillaysing-ui/MELKADLC/releases/download/V1.1.0/MelkaDLC.apk
+          gh api "repos/$GH_REPO/releases/tags/V1.1.0" > "$RUNNER_TEMP/release-after.json"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          tmp=Path(os.environ['RUNNER_TEMP'])
+          recipe=json.loads(Path('android/release/recipe.json').read_text())
+          with (tmp/'downloaded.apk').open('rb') as f:
+              assert hashlib.file_digest(f,'sha256').hexdigest()==recipe['apk_sha256']
+          before=json.loads((tmp/'release-before.json').read_text())
+          after=json.loads((tmp/'release-after.json').read_text())
+          assert before['id']==after['id'] and after['tag_name']=='V1.1.0'
+          assert all(any(a['id']==b['id'] and a['name']==b['name'] and a['digest']==b['digest'] for a in after['assets']) for b in before['assets'])
+          print('Public APK download verified; all original release assets preserved')
+          PY
