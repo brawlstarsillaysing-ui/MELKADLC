@@ -1,0 +1,9 @@
+{$API_DOMAIN} {
+    @public path /v1/* /health
+    handle @public {
+        reverse_proxy backend:8000
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

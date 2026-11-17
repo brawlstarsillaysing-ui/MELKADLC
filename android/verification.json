@@ -1,0 +1,10 @@
+{
+  "original_sha256": "639e45b129443b86fd35e4f03487547dce599a52443a37ba4ead22ceb082cb6e",
+  "apk_sha256": "07efc8ec163746911f7d46828c371b3250dcfafba70232e75ceec2699dd20376",
+  "certificate_sha256": "684222e0f663d951bf31b16637e5d1d4b424341344e3bd89b64c76d4f9273d27",
+  "new_signing_identity": true,
+  "requires_reinstall": true,
+  "licensing_enabled": false,
+  "native_payload_and_launch_script_unchanged": true,
+  "runtime_device_tested": false
+}

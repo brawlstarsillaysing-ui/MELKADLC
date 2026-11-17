@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+*.apk
+*.p12
+*.jks
+*.keystore
+**/__pycache__
+**/build
+.pytest_cache
+.ruff_cache
+android
+tests
+docs
+kimik28jb (1).md
+photo_5463046913180508578_y.jpg

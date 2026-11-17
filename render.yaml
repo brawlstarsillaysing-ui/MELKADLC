@@ -1,0 +1,44 @@
+# Review Render's current plan costs before deploying this blueprint.
+# One always-on API, one bot worker and one persistent PostgreSQL database.
+databases:
+  - name: melkadlc-db
+    databaseName: melka
+    user: melka
+    ipAllowList: []
+services:
+  - type: web
+    name: melkadlc-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: {name: melkadlc-db, property: connectionString}
+      - key: SERVICE_TOKEN
+        generateValue: true
+      - key: KEY_HASH_SECRET
+        generateValue: true
+      - key: KEY_ENCRYPTION_SECRET
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: PAYMENT_CARD
+        sync: false
+      - key: PAYMENT_RECIPIENT
+        sync: false
+  - type: worker
+    name: melkadlc-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m telegram_bot.main
+    envVars:
+      - key: SERVICE_TOKEN
+        fromService: {type: web, name: melkadlc-api, envVarKey: SERVICE_TOKEN}
+      - key: API_BASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        value: MelkaDLCtrialbot
+      - key: ADMIN_IDS
+        sync: false
