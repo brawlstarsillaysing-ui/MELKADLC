@@ -1,10 +1,14 @@
 {
   "original_sha256": "639e45b129443b86fd35e4f03487547dce599a52443a37ba4ead22ceb082cb6e",
-  "apk_sha256": "07efc8ec163746911f7d46828c371b3250dcfafba70232e75ceec2699dd20376",
+  "apk_sha256": "11cd3d0b8e18f81de4e03ceeeaca5d922906798fea082044568eb0f5ac10f224",
   "certificate_sha256": "684222e0f663d951bf31b16637e5d1d4b424341344e3bd89b64c76d4f9273d27",
-  "new_signing_identity": true,
-  "requires_reinstall": true,
-  "licensing_enabled": false,
-  "native_payload_and_launch_script_unchanged": true,
+  "new_signing_identity": false,
+  "compatible_with_previous_melkadlc_certificate": true,
+  "requires_reinstall_over_original_skinchiki": true,
+  "licensing_enabled": true,
+  "native_changes": "fixed branding strings and expected branding CRC only",
+  "module_sha256": "7a4356648f8636e875d2cbd429839404257889d7c7ad97876c4e482fea5ef0f1",
+  "launch_sha256": "cc52d6768dd74e873d745d03d9df750764c5c3c823381f7981723e46298b5d49",
+  "api_url": "https://melkadlc.onrender.com",
   "runtime_device_tested": false
 }

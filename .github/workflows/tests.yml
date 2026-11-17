@@ -26,3 +26,8 @@ jobs:
       - run: python -m pytest -q
         env:
           TEST_DATABASE_URL: postgresql+psycopg://melka:ci-only-password@localhost:5432/melka_test
+      - name: Test the Android license lease
+        run: |
+          mkdir -p "$RUNNER_TEMP/license-tests"
+          javac -d "$RUNNER_TEMP/license-tests" android/src/com/melkadlc/LicenseLease.java tests/java/LicenseLeaseTest.java
+          java -cp "$RUNNER_TEMP/license-tests" com.melkadlc.LicenseLeaseTest

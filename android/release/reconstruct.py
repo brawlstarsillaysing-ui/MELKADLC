@@ -8,8 +8,13 @@ import argparse
 import base64
 import hashlib
 import json
+import sys
+import zipfile
 import zlib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from native_branding import patch_module  # noqa: E402
 
 
 def sha(path):
@@ -26,7 +31,16 @@ def main():
     assert sha(args.original) == recipe["original_sha256"], "Unexpected original APK"
     with args.original.open("rb") as original, args.output.open("xb") as target:
         for segment in recipe["segments"]:
-            if "literal" in segment:
+            if segment.get("operation") == "deflate_branded_module":
+                with zipfile.ZipFile(args.original) as archive:
+                    module = patch_module(archive.read("lib/arm64-v8a/libmodule.so"))
+                compressor = zlib.compressobj(level=9, wbits=-15)
+                start = target.tell()
+                for i in range(0, len(module), 1024 * 1024):
+                    target.write(compressor.compress(module[i : i + 1024 * 1024]))
+                target.write(compressor.flush())
+                assert target.tell() - start == segment["length"], "Unexpected compression output"
+            elif "literal" in segment:
                 target.write(zlib.decompress(base64.b64decode(segment["literal"], validate=True)))
             else:
                 original.seek(segment["offset"])

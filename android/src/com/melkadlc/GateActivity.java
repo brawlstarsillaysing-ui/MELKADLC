@@ -14,23 +14,24 @@ import org.json.JSONObject;
 import java.io.*;
 import java.net.URL;
 import java.security.KeyStore;
-import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import javax.crypto.*;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.net.ssl.HttpsURLConnection;
 
-/** Launcher and optional licensing gate. No root/process-loading implementation is changed. */
+/** Mandatory server licensing. No root/process-loading implementation is changed. */
 public final class GateActivity extends Activity {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private LinearLayout content;
     private TextView status;
     private EditText key;
     private volatile boolean busy;
-    private static volatile long allowedUntil;
-    private static volatile long lastVerified;
+    private static volatile LicenseLease lease;
+    private Button enterButton;
     private static final String BOT = "https://t.me/MelkaDLCtrialbot";
+    private static final String CHANNEL = "https://t.me/MelkaDLCRealese";
+    private static final String VERSION = "0.15-licensed";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final int BG = 0xff050505, CARD = 0xff151515;
 
@@ -40,48 +41,58 @@ public final class GateActivity extends Activity {
         byte[] b = new byte[2048]; int n;
         while ((n = in.read(b)) > 0) out.write(b,0,n);
         in.close();
-        String base = new JSONObject(out.toString("UTF-8")).optString("api_url", "");
-        if (!base.isEmpty() && (!base.startsWith("https://") || new URL(base).getUserInfo()!=null))
+        JSONObject config = new JSONObject(out.toString("UTF-8"));
+        String base = config.getString("api_url");
+        URL origin = new URL(base);
+        if (!config.getBoolean("licensing_enabled") || !"https".equals(origin.getProtocol()) ||
+                origin.getHost().isEmpty() || origin.getUserInfo()!=null || origin.getQuery()!=null ||
+                origin.getRef()!=null || (!origin.getPath().isEmpty() && !"/".equals(origin.getPath())))
             throw new SecurityException("HTTPS required");
         return base;
     }
 
     public static boolean allowed(Context c) {
         try {
-            if (api(c).isEmpty()) return true; // Explicit rebrand-only build until a real API is deployed.
-            long now = SystemClock.elapsedRealtime();
-            return now < allowedUntil && now-lastVerified < 60000;
+            api(c);
+            LicenseLease current = lease;
+            return current != null && current.valid(SystemClock.elapsedRealtime());
         } catch (Exception e) { return false; }
     }
 
     /** Called by the original Activity before its UI starts. */
-    public static void require(final Activity a) {
+    public static boolean require(final Activity a) {
         if (!allowed(a)) {
             a.startActivity(new Intent(a,GateActivity.class));
             a.finish();
-            return;
+            return false;
         }
-        try { if (api(a).isEmpty()) return; } catch(Exception e) { a.finish(); return; }
         final Runnable[] poll = new Runnable[1];
+        final long[] nextCheck = {SystemClock.elapsedRealtime()+20000};
+        final java.util.concurrent.atomic.AtomicBoolean checking = new java.util.concurrent.atomic.AtomicBoolean(false);
         poll[0] = new Runnable() { public void run() {
             if (a.isFinishing() || a.isDestroyed()) return;
-            if (SystemClock.elapsedRealtime() >= allowedUntil) {
+            if (!allowed(a)) {
                 a.startActivity(new Intent(a,GateActivity.class)); a.finish(); return;
             }
-            // Refresh the server decision every 30s; offline access is limited to 60s after verification.
+            if(SystemClock.elapsedRealtime() >= nextCheck[0] && checking.compareAndSet(false,true)) {
+            nextCheck[0]=SystemClock.elapsedRealtime()+20000;
             new Thread(new Runnable() { public void run() {
                 try {
+                    long started=SystemClock.elapsedRealtime();
                     JSONObject r = request(a,"GET","/v1/license",null,loadToken(a));
-                    accept(r);
+                    if(!a.isFinishing() && !a.isDestroyed()) accept(r,started);
                 } catch(Exception e) {
-                    if (!allowed(a)) MAIN.post(new Runnable() { public void run() {
+                    lease=null;
+                    MAIN.post(new Runnable() { public void run() {
                         if (!a.isFinishing()) { a.startActivity(new Intent(a,GateActivity.class)); a.finish(); }
                     }});
-                }
+                } finally {checking.set(false);}
             }},"melka-license-check").start();
-            MAIN.postDelayed(poll[0],30000);
+            }
+            MAIN.postDelayed(poll[0],1000);
         }};
-        MAIN.postDelayed(poll[0],30000);
+        MAIN.postDelayed(poll[0],1000);
+        return true;
     }
 
     /** Add account information and links around the original root view without replacing its controls. */
@@ -95,7 +106,7 @@ public final class GateActivity extends Activity {
         frame.addView(badge,new LinearLayout.LayoutParams(-1,-2));
         frame.addView(original,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout links=new LinearLayout(a);
-        String[] names={"ОБНОВЛЕНИЯ","ОТЧЁТ","TELEGRAM"};
+        String[] names={"ОБНОВЛЕНИЯ","ОТЧЁТ","КАНАЛ"};
         for(int index=0;index<names.length;index++) {
             final int action=index;
             Button b=new Button(a);b.setText(names[index]);b.setTextSize(10);b.setAllCaps(false);
@@ -105,10 +116,10 @@ public final class GateActivity extends Activity {
                 if(action==0)updates(a);
                 if(action==1){Intent share=new Intent(Intent.ACTION_SEND);share.setType("text/plain");
                     share.putExtra(Intent.EXTRA_SUBJECT,"MELKADLC • DIAGNOSTICS");
-                    share.putExtra(Intent.EXTRA_TEXT,"MELKADLC 0.14-melkadlc\nLicense verification: "+(allowed(a)?"ready":"required")+
+                    share.putExtra(Intent.EXTRA_TEXT,"MELKADLC "+VERSION+"\nLicense verification: "+(allowed(a)?"ready":"required")+
                         "\nAndroid API: "+Build.VERSION.SDK_INT);
                     a.startActivity(Intent.createChooser(share,"ОТПРАВИТЬ ОТЧЁТ"));}
-                if(action==2)browse(a,BOT);
+                if(action==2)browse(a,CHANNEL);
             }});
         }
         frame.addView(links);a.setContentView(frame);
@@ -116,8 +127,8 @@ public final class GateActivity extends Activity {
         final Runnable[] tick=new Runnable[1];tick[0]=new Runnable(){public void run(){
             if(a.isFinishing()||a.isDestroyed())return;
             try {
-                if(api(a).isEmpty()) {badge.setText("MELKADLC • 0.14-melkadlc");return;}
-                long seconds=Math.max(0,(allowedUntil-SystemClock.elapsedRealtime())/1000);
+                LicenseLease current=lease;
+                long seconds=current==null?0:current.secondsLeft(SystemClock.elapsedRealtime());
                 badge.setText("MELKADLC PREMIUM • "+(seconds>0?"ACTIVE":"EXPIRED")+"\n"+
                     String.format(Locale.ROOT,"Осталось: %d ч %02d мин • ПРОДЛИТЬ",seconds/3600,(seconds%3600)/60));
                 MAIN.postDelayed(tick[0],1000);
@@ -132,14 +143,13 @@ public final class GateActivity extends Activity {
 
     private static void updates(final Activity a){
         new Thread(new Runnable(){public void run(){
-            String latest="Не настроена",notes="",link="https://github.com/brawlstarsillaysing-ui/MELKADLC/releases/tag/V1.1.0";
+            String latest="—",notes="";
             try{JSONObject r=request(a,"GET","/v1/updates",null,null);latest=r.optString("latest_version","Не настроена");
-                notes=r.optString("notes","");link=r.optString("url",link);}catch(Exception ignored){}
-            final String text="Текущая версия: 0.14-melkadlc\nПоследняя версия: "+latest+"\n"+notes;
-            final String target=link;
+                notes=r.optString("notes","");}catch(Exception ignored){}
+            final String text="Текущая версия: "+VERSION+"\nПоследняя версия: "+latest+"\n"+notes;
             a.runOnUiThread(new Runnable(){public void run(){if(!a.isFinishing())
                 new android.app.AlertDialog.Builder(a).setTitle("ОБНОВЛЕНИЯ MELKADLC").setMessage(text)
-                    .setPositiveButton("GITHUB RELEASE",new DialogInterface.OnClickListener(){public void onClick(DialogInterface d,int w){browse(a,target);}})
+                    .setPositiveButton("КАНАЛ MELKADLC",new DialogInterface.OnClickListener(){public void onClick(DialogInterface d,int w){browse(a,CHANNEL);}})
                     .setNegativeButton("ЗАКРЫТЬ",null).show();}});
         }},"melka-updates").start();
     }
@@ -159,9 +169,9 @@ public final class GateActivity extends Activity {
         io.execute(new Runnable() { public void run() {
             try {
                 Class.forName("a.b").getMethod("c",Context.class).invoke(null,GateActivity.this);
-                final boolean configured = !api(GateActivity.this).isEmpty();
+                api(GateActivity.this);
                 runOnUiThread(new Runnable() { public void run() {
-                    if (!configured) enter(); else { login(); verify(); }
+                    if(!isFinishing() && !isDestroyed()) {login(); verify();}
                 }});
             } catch(Exception e) {
                 runOnUiThread(new Runnable() { public void run() {
@@ -173,6 +183,7 @@ public final class GateActivity extends Activity {
     }
 
     private void login() {
+        enterButton=null;
         content.removeAllViews();
         if(content.getParent() instanceof ViewGroup)((ViewGroup)content.getParent()).removeView(content);
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
@@ -190,6 +201,7 @@ public final class GateActivity extends Activity {
         button("ПОЛУЧИТЬ КЛЮЧ В TELEGRAM",new Runnable(){public void run(){open(BOT);}},false);
         button("ПРОВЕРИТЬ ПОДПИСКУ",new Runnable(){public void run(){verify();}},false);
         button("ПОДДЕРЖКА",new Runnable(){public void run(){open(BOT);}},false);
+        button("КАНАЛ @MelkaDLCRealese",new Runnable(){public void run(){open(CHANNEL);}},false);
         status=text("",14,0xffa0a0a0); content.addView(status);
     }
 
@@ -206,8 +218,9 @@ public final class GateActivity extends Activity {
                 String id=prefs.getString("id",null);
                 if(id==null){id=UUID.randomUUID().toString();prefs.edit().putString("id",id).commit();}
                 JSONObject body=new JSONObject().put("key",value).put("device_id",id);
+                long started=SystemClock.elapsedRealtime();
                 final JSONObject result=request(GateActivity.this,"POST","/v1/activate",body,null);
-                saveToken(GateActivity.this,result.getString("session_token")); accept(result);
+                accept(result,started); saveToken(GateActivity.this,result.getString("session_token"));
                 success(result);
             } catch(final Exception e){error(e);} finally{busy=false;}
         }});
@@ -218,28 +231,33 @@ public final class GateActivity extends Activity {
         busy=true; if(status!=null)status.setText("Проверка подписки…");
         io.execute(new Runnable(){public void run(){
             try {
+                long started=SystemClock.elapsedRealtime();
                 final JSONObject result=request(GateActivity.this,"GET","/v1/license",null,loadToken(GateActivity.this));
-                accept(result); success(result);
+                accept(result,started); success(result);
             } catch(final Exception e){error(e);} finally{busy=false;}
         }});
     }
 
-    private static void accept(JSONObject result) throws Exception {
-        long server=parse(result.getString("server_time")), expiry=parse(result.getString("expires_at"));
-        long now=SystemClock.elapsedRealtime();
-        if(expiry<=server)throw new IOException("key_expired");
-        allowedUntil=now+(expiry-server); lastVerified=now;
+    private static void accept(JSONObject result,long started) throws Exception {
+        LicenseLease next=new LicenseLease(result.getString("status"),result.getString("server_time"),
+            result.getString("activated_at"),result.getString("expires_at"),started);
+        if(!next.valid(SystemClock.elapsedRealtime()))throw new IOException("key_expired");
+        lease=next;
     }
 
     private void success(final JSONObject result) {
         runOnUiThread(new Runnable(){public void run(){
+            if(isFinishing() || isDestroyed())return;
             status.setText("ACCESS GRANTED\nMELKADLC PREMIUM • ACTIVE\nИстекает: "+result.optString("expires_at"));
             status.setAlpha(0); status.animate().alpha(1).setDuration(250).start();
-            button("ОТКРЫТЬ MELKADLC",new Runnable(){public void run(){enter();}},true);
+            if(enterButton==null)enterButton=button("ОТКРЫТЬ MELKADLC",new Runnable(){public void run(){enter();}},true);
+            enterButton.setEnabled(true);
         }});
     }
 
-    private void error(final Exception e){runOnUiThread(new Runnable(){public void run(){
+    private void error(final Exception e){lease=null;runOnUiThread(new Runnable(){public void run(){
+        if(isFinishing() || isDestroyed())return;
+        if(enterButton!=null)enterButton.setEnabled(false);
         String code=e.getMessage(),message="Ошибка подключения. Повторите проверку.";
         if("key_not_found".equals(code))message="Ключ не найден.";
         if("key_blocked".equals(code)||"account_blocked".equals(code))message="Доступ заблокирован.";
@@ -249,13 +267,6 @@ public final class GateActivity extends Activity {
         if("rate_limited".equals(code))message="Слишком много попыток. Повторите через минуту.";
         if(status!=null)status.setText(message);
     }});}
-
-    private static long parse(String iso) throws Exception {
-        // Server timestamps may contain fractional microseconds and a UTC offset.
-        String clean=iso.replaceAll("\\.[0-9]+", "").replace("+00:00","Z");
-        SimpleDateFormat f=new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'",Locale.ROOT);
-        f.setTimeZone(TimeZone.getTimeZone("UTC"));return f.parse(clean).getTime();
-    }
 
     private static JSONObject request(Context c,String method,String path,JSONObject body,String token) throws Exception {
         String base=api(c); if(base.isEmpty())throw new IOException("unconfigured");
@@ -304,16 +315,17 @@ public final class GateActivity extends Activity {
         t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER);t.setPadding(0,dp(10),0,dp(10));return t;}
     private GradientDrawable card(boolean stroke){GradientDrawable d=new GradientDrawable();d.setColor(CARD);
         d.setCornerRadius(dp(18));if(stroke)d.setStroke(dp(1),0x55ffffff);return d;}
-    private void button(String value,final Runnable action,boolean primary){
+    private Button button(String value,final Runnable action,boolean primary){
         Button b=new Button(this);b.setText(value);b.setTextSize(12);b.setAllCaps(false);
         b.setTextColor(primary?Color.BLACK:Color.WHITE);GradientDrawable d=card(true);
         if(primary)d.setColor(Color.WHITE);b.setBackground(d);
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));p.setMargins(0,dp(8),0,0);
         content.addView(b,p);b.setOnClickListener(new View.OnClickListener(){public void onClick(View v){action.run();}});
+        return b;
     }
     private void open(String url){try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));}
         catch(ActivityNotFoundException e){if(status!=null)status.setText("Установите браузер или Telegram.");}}
-    private void enter(){try{Intent i=new Intent();i.setClassName(this,"com.local.moduleloader.MainActivity");
+    private void enter(){if(!allowed(this)){lease=null;verify();return;}try{Intent i=new Intent();i.setClassName(this,"com.local.moduleloader.MainActivity");
         startActivity(i);finish();}catch(Exception e){if(status!=null)status.setText("Не удалось открыть MELKADLC.");}}
     @Override public void onDestroy(){io.shutdownNow();super.onDestroy();}
 

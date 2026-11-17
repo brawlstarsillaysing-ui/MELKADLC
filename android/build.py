@@ -1,4 +1,4 @@
-"""Rebrand the pinned original APK; preserve native libraries and launcher script exactly.
+"""Build the licensed APK from the pinned original; retain feature code and update bounded branding fields.
 
 Run --help for explicit tool paths. No debug key or implicit keystore is ever used.
 This creates a new signing identity only when the owner supplies/authorizes that key.
@@ -12,6 +12,8 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+
+from native_branding import patch_module
 
 ORIGINAL_SHA256 = "639e45b129443b86fd35e4f03487547dce599a52443a37ba4ead22ceb082cb6e"
 ORIGINAL_CERT = "7ed71267a266cfc02225869cfda923f778ace1d497868b57a98fcb9e6ccd088f"
@@ -29,35 +31,40 @@ def sha(path):
 
 
 def splice(original, overlay, target):
-    """Preserve the exact compressed native payloads; overlay only rebuilt app resources/dex."""
+    """Copy raw ZIP members without changing their compressed streams."""
+    import copy
+    import struct
+
+    def copy_member(source, out, original_info):
+        info = copy.copy(original_info)
+        source.fp.seek(info.header_offset)
+        header = source.fp.read(30)
+        assert header[:4] == b"PK\x03\x04"
+        name_len, extra_len = struct.unpack_from("<HH", header, 26)
+        length = 30 + name_len + extra_len + info.compress_size
+        if info.flag_bits & 8:
+            source.fp.seek(info.header_offset + length)
+            length += 16 if source.fp.read(4) == b"PK\x07\x08" else 12
+        source.fp.seek(info.header_offset)
+        info.header_offset = out.fp.tell()
+        while length:
+            chunk = source.fp.read(min(1024 * 1024, length))
+            assert chunk
+            out.fp.write(chunk)
+            length -= len(chunk)
+        out.filelist.append(info)
+        out.NameToInfo[info.filename] = info
+        out.start_dir = out.fp.tell()
+
     with (
         zipfile.ZipFile(original) as old,
         zipfile.ZipFile(overlay) as new,
         zipfile.ZipFile(target, "w") as out,
     ):
-        # Raw-copy native members (not a re-compression), retaining their CRC and sizes.
-        with Path(original).open("rb") as stream:
-            entries = old.infolist()
-            for index, info in enumerate(entries):
-                if not info.filename.startswith(("lib/", "assets/launch.sh")):
-                    continue
-                start = info.header_offset
-                end = entries[index + 1].header_offset if index + 1 < len(entries) else old.start_dir
-                stream.seek(start)
-                info.header_offset = out.fp.tell()
-                remaining = end - start
-                while remaining:
-                    data = stream.read(min(1024 * 1024, remaining))
-                    if not data:
-                        raise RuntimeError("Unexpected end of original ZIP")
-                    out.fp.write(data)
-                    remaining -= len(data)
-                out.filelist.append(info)
-                out.NameToInfo[info.filename] = info
-                out.start_dir = out.fp.tell()
+        copy_member(old, out, old.getinfo("lib/arm64-v8a/liblauncher.so"))
         for info in new.infolist():
-            if not info.filename.startswith(("lib/", "assets/launch.sh", "META-INF/")):
-                out.writestr(info, new.read(info.filename))
+            if info.filename != "lib/arm64-v8a/liblauncher.so" and not info.filename.startswith("META-INF/"):
+                copy_member(new, out, info)
 
 
 def main():
@@ -76,13 +83,11 @@ def main():
     ]:
         p.add_argument("--" + name, required=True, type=Path)
     p.add_argument("--alias", default="melkadlc-release")
-    p.add_argument(
-        "--api-url", default="", help="Real HTTPS FastAPI origin. Empty means explicit rebrand-only mode."
-    )
+    p.add_argument("--api-url", default="https://melkadlc.onrender.com", help="Required HTTPS API origin")
     args = p.parse_args()
     if sha(args.original) != ORIGINAL_SHA256:
         p.error("Original APK SHA256 does not match V1.1.0; refusing to patch an unknown build")
-    if args.api_url and (not args.api_url.startswith("https://") or "@" in args.api_url):
+    if not args.api_url.startswith("https://") or "@" in args.api_url:
         p.error("API URL must be HTTPS without credentials")
     work = args.work.resolve()
     if work.exists():
@@ -92,10 +97,19 @@ def main():
     decoded = work / "decoded"
     run("java", "-jar", args.apktool, "if", args.android_jar, "-p", framework)
     run("java", "-jar", args.apktool, "d", args.original, "-p", framework, "-o", decoded)
+    module_path = decoded / "lib/arm64-v8a/libmodule.so"
+    module_path.write_bytes(patch_module(module_path.read_bytes()))
+    original_module_hash = "bb56f9a9dacb5470780e992121944cc7b9de7972759bc09b3da5e8952ac09641"
+    module_hash = sha(module_path)
+    launch = decoded / "assets/launch.sh"
+    original_launch_hash = sha(launch)
+    launch.write_text(launch.read_text().replace(original_module_hash, module_hash))
+    launch_hash = sha(launch)
     cert = sha(args.certificate)
     for f in (decoded / "smali").rglob("*.smali"):
         source = f.read_text()
         source = source.replace("tg: @crack_komarq", "MELKADLC").replace(ORIGINAL_CERT, cert)
+        source = source.replace(original_module_hash, module_hash).replace(original_launch_hash, launch_hash)
         source = source.replace('"\\u041a\\u043e\\u0442"', '"MELKADLC"')
         f.write_text(source)
     # Pin change only: the certificate/hash comparisons and all branches remain present.
@@ -123,7 +137,9 @@ def main():
     source = main.read_text()
     source = source.replace(
         '    const-string v0, "MELKADLC"',
-        '    invoke-static {p0}, Lcom/melkadlc/GateActivity;->require(Landroid/app/Activity;)V\n\n    const-string v0, "MELKADLC"',
+        "    invoke-static {p0}, Lcom/melkadlc/GateActivity;->require(Landroid/app/Activity;)Z\n\n"
+        "    move-result v0\n\n    if-nez v0, :melka_access_granted\n\n    return-void\n\n"
+        '    :melka_access_granted\n    const-string v0, "MELKADLC"',
         1,
     )
     main.write_text(source)
@@ -146,6 +162,7 @@ def main():
     application.set(NS + "icon", "@mipmap/ic_launcher")
     application.set(NS + "roundIcon", "@mipmap/ic_launcher")
     application.set(NS + "usesCleartextTraffic", "false")
+    application.set(NS + "debuggable", "false")
     activity = application.find("activity")
     activity.set(NS + "exported", "false")
     for item in list(activity):
@@ -163,16 +180,17 @@ def main():
         json.dumps(
             {
                 "api_url": args.api_url.rstrip("/"),
-                "licensing_enabled": bool(args.api_url),
+                "licensing_enabled": True,
                 "bot_username": "MelkaDLCtrialbot",
+                "channel_username": "MelkaDLCRealese",
             }
         )
     )
     config = decoded / "apktool.yml"
     config.write_text(
         config.read_text()
-        .replace("versionCode: 18", "versionCode: 19")
-        .replace("versionName: 0.13-static", "versionName: 0.14-melkadlc")
+        .replace("versionCode: 18", "versionCode: 20")
+        .replace("versionName: 0.13-static", "versionName: 0.15-licensed")
     )
     rebuilt = work / "rebuilt.apk"
     run("java", "-jar", args.apktool, "b", decoded, "-p", framework, "-o", rebuilt)
@@ -215,6 +233,13 @@ def main():
             if not info.filename.startswith(("lib/", "META-INF/")) and info.filename != "classes.dex":
                 new.writestr(info, old.read(info.filename))
         new.writestr("classes.dex", (dex / "classes.dex").read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
+        module_info = zipfile.ZipInfo("lib/arm64-v8a/libmodule.so", date_time=(2026, 11, 17, 0, 0, 0))
+        module_info.compress_type = zipfile.ZIP_DEFLATED
+        module_info._compresslevel = 9
+        with module_path.open("rb") as module, new.open(module_info, "w") as dest:
+            shutil.copyfileobj(module, dest, length=1024 * 1024)
+    rebuilt.unlink()
+    module_path.unlink()
     splice(args.original, overlay, work / "unsigned.apk")
     run(args.build_tools / "zipalign", "-f", "4", work / "unsigned.apk", work / "aligned.apk")
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -236,16 +261,22 @@ def main():
     run(args.build_tools / "apksigner", "verify", "--verbose", "--print-certs", args.out)
     # Independent exact-content preservation check, after signing.
     with zipfile.ZipFile(args.original) as old, zipfile.ZipFile(args.out) as new:
-        for name in ["lib/arm64-v8a/libmodule.so", "lib/arm64-v8a/liblauncher.so", "assets/launch.sh"]:
-            assert hashlib.sha256(old.read(name)).digest() == hashlib.sha256(new.read(name)).digest(), name
+        name = "lib/arm64-v8a/liblauncher.so"
+        assert old.read(name) == new.read(name)
+        assert hashlib.sha256(new.read("lib/arm64-v8a/libmodule.so")).hexdigest() == module_hash
+        assert hashlib.sha256(new.read("assets/launch.sh")).hexdigest() == launch_hash
     report = {
         "original_sha256": ORIGINAL_SHA256,
         "apk_sha256": sha(args.out),
         "certificate_sha256": cert,
-        "new_signing_identity": True,
-        "requires_reinstall": True,
+        "new_signing_identity": False,
+        "compatible_with_previous_melkadlc_certificate": True,
+        "requires_reinstall_over_original_skinchiki": True,
         "licensing_enabled": bool(args.api_url),
-        "native_payload_and_launch_script_unchanged": True,
+        "native_changes": "fixed branding strings and expected branding CRC only",
+        "module_sha256": module_hash,
+        "launch_sha256": launch_hash,
+        "api_url": args.api_url.rstrip("/"),
         "runtime_device_tested": False,
     }
     (work / "verification.json").write_text(json.dumps(report, indent=2))
