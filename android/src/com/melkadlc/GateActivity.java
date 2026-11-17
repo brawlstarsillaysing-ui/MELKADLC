@@ -31,7 +31,7 @@ public final class GateActivity extends Activity {
     private Button enterButton;
     private static final String BOT = "https://t.me/MelkaDLCtrialbot";
     private static final String CHANNEL = "https://t.me/MelkaDLCRealese";
-    private static final String VERSION = "0.15-licensed";
+    private static final String VERSION = "0.16-menu";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final int BG = 0xff050505, CARD = 0xff151515;
 

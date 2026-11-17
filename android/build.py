@@ -189,8 +189,8 @@ def main():
     config = decoded / "apktool.yml"
     config.write_text(
         config.read_text()
-        .replace("versionCode: 18", "versionCode: 20")
-        .replace("versionName: 0.13-static", "versionName: 0.15-licensed")
+        .replace("versionCode: 18", "versionCode: 21")
+        .replace("versionName: 0.13-static", "versionName: 0.16-menu")
     )
     rebuilt = work / "rebuilt.apk"
     run("java", "-jar", args.apktool, "b", decoded, "-p", framework, "-o", rebuilt)
@@ -273,7 +273,10 @@ def main():
         "compatible_with_previous_melkadlc_certificate": True,
         "requires_reinstall_over_original_skinchiki": True,
         "licensing_enabled": bool(args.api_url),
-        "native_changes": "fixed branding strings and expected branding CRC only",
+        "native_changes": "branding strings/RGBA/CRC; two UI callback entry branches; isolated UI code in padding; RX size and RW zero-state size",
+        "native_feature_bytes_unchanged": True,
+        "external_link_labels_hidden": True,
+        "external_link_click_handlers_removed": False,
         "module_sha256": module_hash,
         "launch_sha256": launch_hash,
         "api_url": args.api_url.rstrip("/"),

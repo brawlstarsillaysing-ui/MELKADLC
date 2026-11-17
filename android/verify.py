@@ -30,6 +30,7 @@ def main():
     p.add_argument("updated")
     p.add_argument("--old-cert", default="7ed71267a266cfc02225869cfda923f778ace1d497868b57a98fcb9e6ccd088f")
     p.add_argument("--new-cert", required=True)
+    p.add_argument("--previous", help="Previous licensed MelkaDLC APK for license-instruction comparison")
     args = p.parse_args()
     with zipfile.ZipFile(args.original) as old, zipfile.ZipFile(args.updated) as new:
         assert new.testzip() is None
@@ -63,6 +64,15 @@ def main():
         config = json.loads(new.read("assets/melkadlc.json"))
         assert config["licensing_enabled"] is True
         assert config["api_url"] == "https://melkadlc.onrender.com"
+        if args.previous:
+            with zipfile.ZipFile(args.previous) as previous:
+                prior = DEX(previous.read("classes.dex"))
+                for name in ["Lcom/melkadlc/LicenseLease;", "Lcom/melkadlc/GateActivity;"]:
+                    expected = {
+                        key: [(op, value.replace("0.15-licensed", "0.16-menu")) for op, value in stream]
+                        for key, stream in instructions(prior, name).items()
+                    }
+                    assert expected == instructions(updated, name), "License instructions changed: " + name
     apk = APK(args.updated)
     assert apk.get_package() == "com.local.moduleloader.agnes"
     assert apk.get_app_name() == "MelkaDLC"
@@ -74,7 +84,11 @@ def main():
         json.dumps(
             {
                 "static_comparison": "passed",
-                "native_payload": "only pinned branding fields and their expected CRC changed",
+                "native_payload": "bounded branding/bitmap/CRC, two UI callbacks and isolated padding adapter; all other bytes identical",
+                "previous_license_instructions": "identical except display version"
+                if args.previous
+                else "not compared",
+                "external_link_click_handlers_removed": False,
                 "launcher_script": "only expected module hash changed",
                 "loading_and_storage_instructions": "identical",
                 "integrity_instructions": "identical except authorized certificate and content pins",

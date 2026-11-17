@@ -1,14 +1,20 @@
 {
   "original_sha256": "639e45b129443b86fd35e4f03487547dce599a52443a37ba4ead22ceb082cb6e",
-  "apk_sha256": "11cd3d0b8e18f81de4e03ceeeaca5d922906798fea082044568eb0f5ac10f224",
+  "apk_sha256": "28811f0b0d060a225bfd9942bf041a1f9068ce358493b02a70a1304eafc7679e",
   "certificate_sha256": "684222e0f663d951bf31b16637e5d1d4b424341344e3bd89b64c76d4f9273d27",
   "new_signing_identity": false,
   "compatible_with_previous_melkadlc_certificate": true,
   "requires_reinstall_over_original_skinchiki": true,
   "licensing_enabled": true,
-  "native_changes": "fixed branding strings and expected branding CRC only",
-  "module_sha256": "7a4356648f8636e875d2cbd429839404257889d7c7ad97876c4e482fea5ef0f1",
-  "launch_sha256": "cc52d6768dd74e873d745d03d9df750764c5c3c823381f7981723e46298b5d49",
+  "native_changes": "branding strings/RGBA/CRC; two UI callback entry branches; isolated UI code in padding; RX size and RW zero-state size",
+  "native_feature_bytes_unchanged": true,
+  "external_link_labels_hidden": true,
+  "external_link_click_handlers_removed": false,
+  "module_sha256": "891b88c9cdb7dd1762c19068ff1ed460051765f7aa83e14259e59a70d4cc17a5",
+  "launch_sha256": "90314070f0e4f9d2880323c2e9dd1844760c1fbbe481ca3d722aa501f495b693",
   "api_url": "https://melkadlc.onrender.com",
-  "runtime_device_tested": false
+  "runtime_device_tested": false,
+  "previous_license_instructions": "identical except display version",
+  "native_ui_emulation": "6 tests passed; ARM64, both callbacks, ASLR; existing drawing/clock APIs mocked",
+  "backend_integration_tests": "22 passed"
 }

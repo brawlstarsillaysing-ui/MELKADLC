@@ -26,6 +26,8 @@ jobs:
       - run: python -m pytest -q
         env:
           TEST_DATABASE_URL: postgresql+psycopg://melka:ci-only-password@localhost:5432/melka_test
+      - name: Execute the native menu adapter with mocked drawing APIs
+        run: python android/native-ui/test_ui.py
       - name: Test the Android license lease
         run: |
           mkdir -p "$RUNNER_TEMP/license-tests"
